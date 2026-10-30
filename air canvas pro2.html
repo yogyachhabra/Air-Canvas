@@ -1,0 +1,1438 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover">
+  <meta name="apple-mobile-web-app-capable" content="yes">
+  <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+  <title>Air Canvas Studio - MediaPipe AI Drawing</title>
+  
+  <!-- Tailwind CSS -->
+  <script src="https://cdn.tailwindcss.com"></script>
+  <!-- Lucide Icons -->
+  <script src="https://unpkg.com/lucide@latest"></script>
+  <!-- Canvas Confetti for Celebration on Clear / Save -->
+  <script src="https://cdn.jsdelivr.net/npm/canvas-confetti@1.6.0/dist/confetti.browser.min.js"></script>
+
+  <!-- MediaPipe Hands & Camera Utils -->
+  <script src="https://cdn.jsdelivr.net/npm/@mediapipe/camera_utils/camera_utils.js" crossorigin="anonymous"></script>
+  <script src="https://cdn.jsdelivr.net/npm/@mediapipe/hands/hands.js" crossorigin="anonymous"></script>
+
+  <!-- Google Font -->
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@300;400;500;600;700;800&family=JetBrains+Mono:wght@400;600&display=swap" rel="stylesheet">
+
+  <script>
+    tailwind.config = {
+      darkMode: 'class',
+      theme: {
+        extend: {
+          fontFamily: {
+            sans: ['"Plus Jakarta Sans"', 'sans-serif'],
+            mono: ['"JetBrains Mono"', 'monospace'],
+          },
+          colors: {
+            space: {
+              900: '#07090e',
+              800: '#0d111a',
+              700: '#141a29',
+              600: '#1e273d'
+            }
+          }
+        }
+      }
+    }
+  </script>
+
+  <style>
+    * {
+      user-select: none;
+      -webkit-user-select: none;
+      -webkit-touch-callout: none;
+      touch-action: none;
+    }
+    
+    body {
+      background-color: #07090e;
+      overflow: hidden;
+      position: fixed;
+      width: 100%;
+      height: 100%;
+    }
+
+    .glass-panel {
+      background: rgba(13, 17, 26, 0.78);
+      backdrop-filter: blur(16px);
+      -webkit-backdrop-filter: blur(16px);
+      border: 1px solid rgba(255, 255, 255, 0.08);
+      box-shadow: 0 10px 30px -5px rgba(0, 0, 0, 0.5), 0 0 15px rgba(0, 240, 255, 0.05);
+    }
+
+    .glass-button {
+      background: rgba(255, 255, 255, 0.06);
+      border: 1px solid rgba(255, 255, 255, 0.12);
+      transition: all 0.2s cubic-bezier(0.16, 1, 0.3, 1);
+      -webkit-tap-highlight-color: transparent;
+    }
+    .glass-button:hover, .glass-button:active {
+      background: rgba(255, 255, 255, 0.14);
+      border-color: rgba(255, 255, 255, 0.28);
+    }
+    .glass-button.active {
+      background: rgba(99, 102, 241, 0.4);
+      border-color: rgba(129, 140, 248, 0.85);
+      box-shadow: 0 0 18px rgba(99, 102, 241, 0.5);
+    }
+
+    /* Custom range sliders */
+    input[type=range] {
+      -webkit-appearance: none;
+      appearance: none;
+      background: rgba(255, 255, 255, 0.15);
+      height: 8px;
+      border-radius: 9999px;
+      outline: none;
+    }
+    input[type=range]::-webkit-slider-thumb {
+      -webkit-appearance: none;
+      appearance: none;
+      width: 20px;
+      height: 20px;
+      border-radius: 50%;
+      background: #38bdf8;
+      cursor: pointer;
+      box-shadow: 0 0 10px #38bdf8;
+      border: 2px solid #ffffff;
+    }
+
+    /* Dynamic mirroring class */
+    .mirror-view {
+      transform: scaleX(-1);
+    }
+
+    /* Radial Clear Countdown SVG Animation */
+    .progress-ring__circle {
+      transition: stroke-dashoffset 0.1s linear;
+      transform: rotate(-90deg);
+      transform-origin: 50% 50%;
+    }
+
+    /* Safe area padding for iPhone notch and home bar */
+    .pt-safe {
+      padding-top: max(0.75rem, env(safe-area-inset-top));
+    }
+    .pb-safe {
+      padding-bottom: max(0.75rem, env(safe-area-inset-bottom));
+    }
+    .pl-safe {
+      padding-left: max(0.75rem, env(safe-area-inset-left));
+    }
+    .pr-safe {
+      padding-right: max(0.75rem, env(safe-area-inset-right));
+    }
+  </style>
+</head>
+<body class="relative w-screen h-screen overflow-hidden text-slate-100 font-sans select-none bg-space-900">
+
+  <!-- Mobile iOS/Android-ready Raw Webcam Input -->
+  <video id="webcamVideo" class="hidden" playsinline webkit-playsinline muted autoplay></video>
+
+  <!-- Visual Display Layers -->
+  <div id="viewportContainer" class="absolute inset-0 w-full h-full overflow-hidden bg-space-900 touch-none">
+    <!-- Camera Viewport Canvas -->
+    <canvas id="cameraCanvas" class="absolute inset-0 w-full h-full object-cover mirror-view transition-opacity duration-300 pointer-events-none"></canvas>
+    
+    <!-- Drawing Overlay Canvas -->
+    <canvas id="drawCanvas" class="absolute inset-0 w-full h-full object-cover mirror-view pointer-events-none"></canvas>
+
+    <!-- Hand Skeleton Tracking Layer -->
+    <canvas id="trackingCanvas" class="absolute inset-0 w-full h-full object-cover mirror-view pointer-events-none"></canvas>
+
+    <!-- Cursor & Interactive Gesture Particles Layer -->
+    <canvas id="cursorCanvas" class="absolute inset-0 w-full h-full pointer-events-none"></canvas>
+  </div>
+
+  <!-- TOP HEADER HUD (Mobile Safe Area Compliant) -->
+  <header class="absolute top-0 left-0 right-0 z-30 flex items-center justify-between gap-2 p-2 pt-safe pl-safe pr-safe pointer-events-none">
+    <!-- App Branding & Mode Badge -->
+    <div class="flex items-center gap-2 pointer-events-auto">
+      <div class="glass-panel px-3 py-1.5 md:py-2 rounded-2xl flex items-center gap-2.5">
+        <div class="w-8 h-8 rounded-xl bg-gradient-to-tr from-cyan-500 to-indigo-600 flex items-center justify-center shadow-lg shadow-cyan-500/30">
+          <i data-lucide="sparkles" class="w-4 h-4 text-white"></i>
+        </div>
+        <div>
+          <div class="flex items-center gap-1.5">
+            <h1 class="text-xs md:text-sm font-bold tracking-tight bg-gradient-to-r from-white via-slate-100 to-slate-400 bg-clip-text text-transparent">AirCanvas</h1>
+            <span class="text-[9px] font-semibold px-1.5 py-0.2 rounded-full bg-cyan-500/20 text-cyan-300 border border-cyan-500/30">Mobile AI</span>
+          </div>
+          <p id="systemStatusText" class="text-[10px] text-slate-400 flex items-center gap-1 font-mono">
+            <span class="inline-block w-1.5 h-1.5 rounded-full bg-amber-400 animate-ping"></span>
+            Starting Camera...
+          </p>
+        </div>
+      </div>
+
+      <!-- Gesture Pill Feedback (Hidden on tiny phone screens, visible on tablets/desktops) -->
+      <div id="gestureStatusBadge" class="glass-panel px-3 py-1.5 rounded-2xl hidden lg:flex items-center gap-2 transition-all duration-300 border-l-4 border-l-cyan-400">
+        <div id="gestureStatusIcon" class="w-5 h-5 rounded-lg bg-white/10 flex items-center justify-center text-cyan-400">
+          <i data-lucide="hand" class="w-3.5 h-3.5"></i>
+        </div>
+        <div>
+          <p class="text-[9px] text-slate-400 uppercase tracking-wider font-semibold">Active Gesture</p>
+          <p id="gestureStatusName" class="text-xs font-bold text-white tracking-wide">WAITING FOR HAND</p>
+        </div>
+      </div>
+    </div>
+
+    <!-- Quick Global Actions (Undo, Redo, Camera Flip, Settings, Save) -->
+    <div class="flex items-center gap-1.5 pointer-events-auto">
+      <div class="glass-panel p-1 rounded-2xl flex items-center gap-1">
+        <button id="undoBtn" title="Undo Stroke" class="glass-button w-8 h-8 md:w-9 md:h-9 rounded-xl flex items-center justify-center text-slate-200 active:scale-95 disabled:opacity-40 disabled:pointer-events-none">
+          <i data-lucide="undo-2" class="w-3.5 h-3.5 md:w-4 md:h-4"></i>
+        </button>
+        <button id="redoBtn" title="Redo Stroke" class="glass-button w-8 h-8 md:w-9 md:h-9 rounded-xl flex items-center justify-center text-slate-200 active:scale-95 disabled:opacity-40 disabled:pointer-events-none">
+          <i data-lucide="redo-2" class="w-3.5 h-3.5 md:w-4 md:h-4"></i>
+        </button>
+        <button id="clearBtn" title="Clear Canvas" class="glass-button w-8 h-8 md:w-9 md:h-9 rounded-xl flex items-center justify-center text-rose-400 active:scale-95">
+          <i data-lucide="trash-2" class="w-3.5 h-3.5 md:w-4 md:h-4"></i>
+        </button>
+      </div>
+
+      <div class="glass-panel p-1 rounded-2xl flex items-center gap-1">
+        <!-- Switch Camera (Front/Back) for iOS and Android -->
+        <button id="flipCameraBtn" title="Switch Front/Back Camera" class="glass-button w-8 h-8 md:w-9 md:h-9 rounded-xl flex items-center justify-center text-cyan-300 active:scale-95">
+          <i data-lucide="switch-camera" class="w-3.5 h-3.5 md:w-4 md:h-4"></i>
+        </button>
+        <button id="toggleCameraBgBtn" title="Toggle Camera Background" class="glass-button w-8 h-8 md:w-9 md:h-9 rounded-xl flex items-center justify-center text-slate-200 active">
+          <i data-lucide="video" class="w-3.5 h-3.5 md:w-4 md:h-4"></i>
+        </button>
+        <button id="guideModalBtn" title="Help Guide" class="glass-button w-8 h-8 md:w-9 md:h-9 rounded-xl flex items-center justify-center text-amber-300">
+          <i data-lucide="help-circle" class="w-3.5 h-3.5 md:w-4 md:h-4"></i>
+        </button>
+        <button id="exportModalBtn" title="Save Artwork" class="glass-button px-2.5 h-8 md:h-9 rounded-xl flex items-center gap-1 text-xs font-semibold bg-cyan-500/25 border-cyan-400/50 text-cyan-200 active:scale-95">
+          <i data-lucide="download" class="w-3.5 h-3.5 md:w-4 md:h-4"></i>
+          <span class="hidden sm:inline">Save</span>
+        </button>
+      </div>
+    </div>
+  </header>
+
+  <!-- FLOATING ERGONOMIC TOOLBAR (Mobile-Friendly Left/Side Bar) -->
+  <aside class="absolute left-2 top-16 bottom-16 z-30 w-14 md:w-16 pointer-events-none flex flex-col justify-between pl-safe">
+    <div class="glass-panel p-1.5 md:p-2 rounded-2xl flex flex-col items-center gap-1.5 pointer-events-auto max-h-full overflow-y-auto">
+      
+      <!-- Tool Modes -->
+      <div class="flex flex-col gap-1 w-full items-center">
+        <button id="toolBrush" title="Brush" class="tool-btn glass-button w-10 h-10 md:w-11 md:h-11 rounded-xl flex flex-col items-center justify-center active">
+          <i data-lucide="paintbrush" class="w-3.5 h-3.5 md:w-4 md:h-4"></i>
+          <span class="text-[8px] mt-0.5">Pen</span>
+        </button>
+        <button id="toolNeon" title="Neon Glow" class="tool-btn glass-button w-10 h-10 md:w-11 md:h-11 rounded-xl flex flex-col items-center justify-center">
+          <i data-lucide="flame" class="w-3.5 h-3.5 md:w-4 md:h-4"></i>
+          <span class="text-[8px] mt-0.5">Neon</span>
+        </button>
+        <button id="toolRainbow" title="Rainbow Chroma" class="tool-btn glass-button w-10 h-10 md:w-11 md:h-11 rounded-xl flex flex-col items-center justify-center">
+          <i data-lucide="palette" class="w-3.5 h-3.5 md:w-4 md:h-4"></i>
+          <span class="text-[8px] mt-0.5">Chroma</span>
+        </button>
+        <button id="toolEraser" title="Air Eraser" class="tool-btn glass-button w-10 h-10 md:w-11 md:h-11 rounded-xl flex flex-col items-center justify-center text-rose-300">
+          <i data-lucide="eraser" class="w-3.5 h-3.5 md:w-4 md:h-4"></i>
+          <span class="text-[8px] mt-0.5">Eraser</span>
+        </button>
+      </div>
+
+      <div class="w-6 h-[1px] bg-white/10 my-0.5"></div>
+
+      <!-- Color Presets -->
+      <div class="flex flex-col gap-1.5 items-center w-full" id="colorPaletteContainer">
+        <button class="color-swatch w-7 h-7 rounded-full border-2 border-white shadow-md active:scale-90" data-color="#00f0ff" style="background-color: #00f0ff;"></button>
+        <button class="color-swatch w-7 h-7 rounded-full border-2 border-transparent shadow-md active:scale-90" data-color="#39ff14" style="background-color: #39ff14;"></button>
+        <button class="color-swatch w-7 h-7 rounded-full border-2 border-transparent shadow-md active:scale-90" data-color="#ff0055" style="background-color: #ff0055;"></button>
+        <button class="color-swatch w-7 h-7 rounded-full border-2 border-transparent shadow-md active:scale-90" data-color="#ffe600" style="background-color: #ffe600;"></button>
+        <button class="color-swatch w-7 h-7 rounded-full border-2 border-transparent shadow-md active:scale-90" data-color="#bf00ff" style="background-color: #bf00ff;"></button>
+        <button class="color-swatch w-7 h-7 rounded-full border-2 border-transparent shadow-md active:scale-90" data-color="#ffffff" style="background-color: #ffffff;"></button>
+        
+        <!-- Custom Color Input -->
+        <label title="Custom Color" class="relative w-7 h-7 rounded-full border border-dashed border-white/50 flex items-center justify-center cursor-pointer bg-white/5 active:scale-90 overflow-hidden">
+          <input type="color" id="customColorPicker" value="#00f0ff" class="opacity-0 absolute inset-0 cursor-pointer w-full h-full">
+          <i data-lucide="pipette" class="w-3 h-3 text-slate-300"></i>
+        </label>
+      </div>
+
+      <div class="w-6 h-[1px] bg-white/10 my-0.5"></div>
+
+      <!-- Brush Size Trigger & Slider Popover -->
+      <div class="relative group">
+        <button id="sizeTriggerBtn" class="glass-button w-10 h-10 md:w-11 md:h-11 rounded-xl flex flex-col items-center justify-center">
+          <div id="sizePreviewDot" class="w-2.5 h-2.5 rounded-full bg-cyan-400"></div>
+          <span id="sizeLabel" class="text-[8px] font-mono text-slate-300 mt-0.5">8px</span>
+        </button>
+
+        <div class="absolute left-12 bottom-0 glass-panel p-2.5 rounded-2xl w-44 shadow-2xl flex flex-col gap-2 opacity-0 pointer-events-none group-hover:opacity-100 group-hover:pointer-events-auto group-focus-within:opacity-100 group-focus-within:pointer-events-auto transition-all">
+          <div class="flex justify-between items-center text-xs">
+            <span class="text-slate-300 font-semibold text-[11px]">Stroke Size</span>
+            <span id="sliderValueText" class="font-mono text-cyan-400 text-xs">8 px</span>
+          </div>
+          <input id="brushSizeSlider" type="range" min="2" max="50" value="8" class="w-full">
+        </div>
+      </div>
+    </div>
+  </aside>
+
+  <!-- RADIAL CLEAR CANVAS COUNTDOWN OVERLAY -->
+  <div id="clearCountdownOverlay" class="absolute top-1/2 left-1/2 -translate-x-1/2 -translate-y-1/2 z-40 pointer-events-none flex flex-col items-center justify-center transition-opacity duration-200 opacity-0 scale-90">
+    <div class="relative w-32 h-32 md:w-36 md:h-36 flex items-center justify-center">
+      <svg class="w-full h-full" viewBox="0 0 120 120">
+        <circle class="text-white/10" stroke-width="8" stroke="currentColor" fill="transparent" r="50" cx="60" cy="60" />
+        <circle id="radialProgressCircle" class="progress-ring__circle text-red-500" stroke-width="8" stroke-linecap="round" stroke="currentColor" fill="transparent" r="50" cx="60" cy="60" stroke-dasharray="314.159" stroke-dashoffset="314.159" />
+      </svg>
+      <div class="absolute inset-0 flex flex-col items-center justify-center">
+        <i data-lucide="hand" class="w-7 h-7 text-red-400 animate-bounce"></i>
+        <span id="countdownSecText" class="text-[11px] font-mono font-bold text-white mt-1">HOLD OPEN</span>
+      </div>
+    </div>
+    <span class="mt-2 text-[11px] font-medium px-3 py-1 bg-red-950/80 border border-red-500/40 text-red-200 rounded-full backdrop-blur-md">
+      Clearing Canvas...
+    </span>
+  </div>
+
+  <!-- BOTTOM REAL-TIME GESTURE CONTROLS ASSISTANT BAR (Compact for Mobile) -->
+  <div class="absolute bottom-2 left-1/2 -translate-x-1/2 z-20 pointer-events-none w-11/12 max-w-lg pb-safe">
+    <div class="glass-panel px-3 py-1.5 md:px-4 md:py-2 rounded-2xl flex items-center justify-around text-[10px] md:text-xs text-slate-300 pointer-events-auto border-t border-cyan-500/20 shadow-lg">
+      <div class="flex items-center gap-1">
+        <span class="w-1.5 h-1.5 rounded-full bg-cyan-400"></span>
+        <span class="font-semibold text-white">1 Finger:</span>
+        <span class="text-slate-400">Draw</span>
+      </div>
+      <div class="w-[1px] h-3 bg-white/20"></div>
+      <div class="flex items-center gap-1">
+        <span class="w-1.5 h-1.5 rounded-full bg-amber-400"></span>
+        <span class="font-semibold text-white">2 Fingers:</span>
+        <span class="text-slate-400">Hover</span>
+      </div>
+      <div class="w-[1px] h-3 bg-white/20"></div>
+      <div class="flex items-center gap-1">
+        <span class="w-1.5 h-1.5 rounded-full bg-rose-500"></span>
+        <span class="font-semibold text-white">Palm:</span>
+        <span class="text-slate-400">Clear</span>
+      </div>
+    </div>
+  </div>
+
+  <!-- EXPORT / SAVE MODAL -->
+  <div id="exportModal" class="fixed inset-0 z-50 bg-black/75 backdrop-blur-md hidden items-center justify-center p-4">
+    <div class="glass-panel w-full max-w-sm md:max-w-md p-5 md:p-6 rounded-3xl border border-white/10 shadow-2xl space-y-4">
+      <div class="flex items-center justify-between">
+        <div class="flex items-center gap-2">
+          <div class="w-8 h-8 rounded-xl bg-cyan-500/20 text-cyan-400 flex items-center justify-center">
+            <i data-lucide="download-cloud" class="w-4 h-4"></i>
+          </div>
+          <h3 class="text-sm md:text-base font-bold text-white">Save Artwork</h3>
+        </div>
+        <button id="closeExportModal" class="w-8 h-8 rounded-lg glass-button flex items-center justify-center text-slate-400">
+          <i data-lucide="x" class="w-4 h-4"></i>
+        </button>
+      </div>
+
+      <div class="space-y-2">
+        <label class="text-[11px] font-semibold text-slate-300 block">Style Format</label>
+        <div class="grid grid-cols-3 gap-1.5">
+          <button id="exportFormatTransparent" class="glass-button p-2.5 rounded-xl active flex flex-col items-center gap-1 text-center export-type-btn">
+            <span class="text-[10px] font-semibold text-white">Transparent</span>
+            <span class="text-[8px] text-slate-400">Art Only</span>
+          </button>
+          <button id="exportFormatDark" class="glass-button p-2.5 rounded-xl flex flex-col items-center gap-1 text-center export-type-btn">
+            <span class="text-[10px] font-semibold text-white">Dark Matte</span>
+            <span class="text-[8px] text-slate-400">Contrast</span>
+          </button>
+          <button id="exportFormatSnapshot" class="glass-button p-2.5 rounded-xl flex flex-col items-center gap-1 text-center export-type-btn">
+            <span class="text-[10px] font-semibold text-white">Camera Shot</span>
+            <span class="text-[8px] text-slate-400">Combined</span>
+          </button>
+        </div>
+      </div>
+
+      <div class="flex gap-2 pt-1">
+        <button id="downloadNowBtn" class="w-full py-2.5 px-4 rounded-xl font-semibold text-xs bg-gradient-to-r from-cyan-500 to-indigo-600 text-white shadow-lg shadow-cyan-500/25 active:scale-95 flex items-center justify-center gap-1.5">
+          <i data-lucide="check" class="w-4 h-4"></i> Save to Gallery / Files
+        </button>
+      </div>
+    </div>
+  </div>
+
+  <!-- GESTURE GUIDE MODAL -->
+  <div id="guideModal" class="fixed inset-0 z-50 bg-black/75 backdrop-blur-md hidden items-center justify-center p-4">
+    <div class="glass-panel w-full max-w-md p-5 rounded-3xl border border-white/10 shadow-2xl space-y-4">
+      <div class="flex items-center justify-between">
+        <div class="flex items-center gap-2">
+          <div class="w-8 h-8 rounded-xl bg-amber-500/20 text-amber-400 flex items-center justify-center">
+            <i data-lucide="sparkle" class="w-4 h-4"></i>
+          </div>
+          <h3 class="text-sm md:text-base font-bold text-white">Air & Touch Gestures</h3>
+        </div>
+        <button id="closeGuideModal" class="w-8 h-8 rounded-lg glass-button flex items-center justify-center text-slate-400">
+          <i data-lucide="x" class="w-4 h-4"></i>
+        </button>
+      </div>
+
+      <div class="grid grid-cols-1 gap-2.5 text-xs">
+        <div class="glass-button p-3 rounded-xl flex items-center gap-3">
+          <div class="w-7 h-7 rounded-lg bg-cyan-500/20 text-cyan-400 flex items-center justify-center shrink-0">
+            <i data-lucide="edit-3" class="w-4 h-4"></i>
+          </div>
+          <div>
+            <span class="font-bold text-cyan-400 block">Index Finger (Solo)</span>
+            <span class="text-slate-300 text-[11px]">Draw smoothly in the air. 1€ filter cancels out camera tremble.</span>
+          </div>
+        </div>
+
+        <div class="glass-button p-3 rounded-xl flex items-center gap-3">
+          <div class="w-7 h-7 rounded-lg bg-amber-500/20 text-amber-400 flex items-center justify-center shrink-0">
+            <i data-lucide="navigation" class="w-4 h-4"></i>
+          </div>
+          <div>
+            <span class="font-bold text-amber-400 block">Peace Sign (2 Fingers)</span>
+            <span class="text-slate-300 text-[11px]">Hover without drawing. Reposition your hand freely across screen.</span>
+          </div>
+        </div>
+
+        <div class="glass-button p-3 rounded-xl flex items-center gap-3">
+          <div class="w-7 h-7 rounded-lg bg-rose-500/20 text-rose-400 flex items-center justify-center shrink-0">
+            <i data-lucide="refresh-cw" class="w-4 h-4"></i>
+          </div>
+          <div>
+            <span class="font-bold text-rose-400 block">Open 5 Palms</span>
+            <span class="text-slate-300 text-[11px]">Hold open hand toward camera for 0.9s to clear the entire canvas.</span>
+          </div>
+        </div>
+
+        <div class="glass-button p-3 rounded-xl flex items-center gap-3">
+          <div class="w-7 h-7 rounded-lg bg-emerald-500/20 text-emerald-400 flex items-center justify-center shrink-0">
+            <i data-lucide="smartphone" class="w-4 h-4"></i>
+          </div>
+          <div>
+            <span class="font-bold text-emerald-400 block">Touch & Stylus Fallback</span>
+            <span class="text-slate-300 text-[11px]">You can also directly touch or draw with your Apple Pencil/finger on mobile.</span>
+          </div>
+        </div>
+      </div>
+
+      <button id="dismissGuideBtn" class="w-full py-2.5 rounded-xl bg-white/10 active:bg-white/20 text-white font-medium text-xs">Got it</button>
+    </div>
+  </div>
+
+  <!-- CAMERA PERMISSION ERROR / MOBILE HELPER DIALOG -->
+  <div id="cameraErrorModal" class="fixed inset-0 z-50 bg-black/85 backdrop-blur-md hidden items-center justify-center p-4">
+    <div class="glass-panel w-full max-w-sm md:max-w-md p-6 rounded-3xl border border-red-500/30 text-center space-y-3">
+      <div class="w-12 h-12 mx-auto rounded-2xl bg-red-500/20 text-red-400 flex items-center justify-center">
+        <i data-lucide="camera-off" class="w-6 h-6"></i>
+      </div>
+      <h3 class="text-base font-bold text-white">Camera Access Required</h3>
+      <p id="cameraErrorMessage" class="text-xs text-slate-300 leading-relaxed">
+        iOS Safari and Android Chrome require explicit camera permission. Tap below to prompt and grant camera access.
+      </p>
+      <button id="retryCameraBtn" class="w-full py-3 rounded-xl font-semibold text-xs bg-cyan-500 text-white shadow-lg shadow-cyan-500/30 active:bg-cyan-400">
+        Enable Camera & Start
+      </button>
+    </div>
+  </div>
+
+  <script>
+    /* =====================================================================
+     * AIR CANVAS STUDIO - ULTRA-SMOOTH MOBILE (iOS & ANDROID) ENGINE
+     * 1. OneEuroFilter (Adaptive filter for zero jitter + zero lag)
+     * 2. Camera facing switcher (Front/Back) with mobile video stream support
+     * 3. Resilient touch & stylus gesture bindings
+     * 4. Multi-sample Quadratic & Catmull-Rom curves
+     * ===================================================================== */
+
+    class LowPassFilter {
+      constructor(alpha = 0) {
+        this.setAlpha(alpha);
+        this.s = null;
+      }
+      setAlpha(alpha) {
+        this.alpha = Math.max(0, Math.min(1, alpha));
+      }
+      filter(value) {
+        if (this.s === null) {
+          this.s = value;
+        } else {
+          this.s = this.alpha * value + (1.0 - this.alpha) * this.s;
+        }
+        return this.s;
+      }
+      reset() {
+        this.s = null;
+      }
+    }
+
+    class OneEuroFilter {
+      constructor(minCutoff = 1.2, beta = 0.05, dCutoff = 1.0) {
+        this.minCutoff = minCutoff;
+        this.beta = beta;
+        this.dCutoff = dCutoff;
+        this.xFilter = new LowPassFilter();
+        this.dxFilter = new LowPassFilter();
+        this.prevTime = null;
+      }
+
+      computeAlpha(rate, cutoff) {
+        const tau = 1.0 / (2 * Math.PI * cutoff);
+        const te = 1.0 / rate;
+        return 1.0 / (1.0 + tau / te);
+      }
+
+      filter(value, timestamp) {
+        if (!this.prevTime) {
+          this.prevTime = timestamp;
+          this.xFilter.reset();
+          this.dxFilter.reset();
+          return this.xFilter.filter(value);
+        }
+
+        const dt = Math.max((timestamp - this.prevTime) / 1000.0, 0.001);
+        this.prevTime = timestamp;
+        const rate = 1.0 / dt;
+
+        const prevVal = this.xFilter.s !== null ? this.xFilter.s : value;
+        const dx = (value - prevVal) * rate;
+        const alphaD = this.computeAlpha(rate, this.dCutoff);
+        this.dxFilter.setAlpha(alphaD);
+        const edx = this.dxFilter.filter(dx);
+
+        const cutoff = this.minCutoff + this.beta * Math.abs(edx);
+        const alpha = this.computeAlpha(rate, cutoff);
+        this.xFilter.setAlpha(alpha);
+        return this.xFilter.filter(value);
+      }
+
+      reset() {
+        this.prevTime = null;
+        this.xFilter.reset();
+        this.dxFilter.reset();
+      }
+    }
+
+    class Point2DFilter {
+      constructor(minCutoff = 1.6, beta = 0.05) {
+        this.filterX = new OneEuroFilter(minCutoff, beta);
+        this.filterY = new OneEuroFilter(minCutoff, beta);
+      }
+      filter(x, y, timestamp) {
+        return {
+          x: this.filterX.filter(x, timestamp),
+          y: this.filterY.filter(y, timestamp)
+        };
+      }
+      reset() {
+        this.filterX.reset();
+        this.filterY.reset();
+      }
+    }
+
+    // Detect mobile device
+    const isMobile = /Android|webOS|iPhone|iPad|iPod|BlackBerry|IEMobile|Opera Mini/i.test(navigator.userAgent) || (navigator.maxTouchPoints > 1);
+
+    // App State
+    const AppState = {
+      tool: 'brush', // 'brush', 'neon', 'rainbow', 'eraser'
+      color: '#00f0ff',
+      rainbowHue: 0,
+      brushSize: 8,
+      eraserSize: 34,
+
+      showCameraFeed: true,
+      facingMode: 'user', // 'user' (front) or 'environment' (back)
+      isMirrored: true,
+
+      tipFilter: new Point2DFilter(1.6, 0.05),
+      prevPoint: null,
+      isCurrentlyDrawing: false,
+
+      gestureDebounceBuffer: [],
+      debounceWindowSize: 3,
+      currentGesture: 'IDLE',
+      
+      palmClearStartTime: null,
+      palmClearDurationMs: 900,
+
+      history: [],
+      historyIndex: -1,
+      maxHistory: 25,
+
+      particles: [],
+      exportFormat: 'transparent'
+    };
+
+    // DOM Elements
+    const videoElement = document.getElementById('webcamVideo');
+    const cameraCanvas = document.getElementById('cameraCanvas');
+    const drawCanvas = document.getElementById('drawCanvas');
+    const trackingCanvas = document.getElementById('trackingCanvas');
+    const cursorCanvas = document.getElementById('cursorCanvas');
+
+    const cameraCtx = cameraCanvas.getContext('2d');
+    const drawCtx = drawCanvas.getContext('2d');
+    const trackingCtx = trackingCanvas.getContext('2d');
+    const cursorCtx = cursorCanvas.getContext('2d');
+
+    const systemStatusText = document.getElementById('systemStatusText');
+    const gestureStatusBadge = document.getElementById('gestureStatusBadge');
+    const gestureStatusIcon = document.getElementById('gestureStatusIcon');
+    const gestureStatusName = document.getElementById('gestureStatusName');
+
+    const clearCountdownOverlay = document.getElementById('clearCountdownOverlay');
+    const radialProgressCircle = document.getElementById('radialProgressCircle');
+    const countdownSecText = document.getElementById('countdownSecText');
+
+    const undoBtn = document.getElementById('undoBtn');
+    const redoBtn = document.getElementById('redoBtn');
+    const clearBtn = document.getElementById('clearBtn');
+    const flipCameraBtn = document.getElementById('flipCameraBtn');
+    const toggleCameraBgBtn = document.getElementById('toggleCameraBgBtn');
+
+    const brushSizeSlider = document.getElementById('brushSizeSlider');
+    const sliderValueText = document.getElementById('sliderValueText');
+    const sizeLabel = document.getElementById('sizeLabel');
+    const sizePreviewDot = document.getElementById('sizePreviewDot');
+    const customColorPicker = document.getElementById('customColorPicker');
+
+    const exportModal = document.getElementById('exportModal');
+    const exportModalBtn = document.getElementById('exportModalBtn');
+    const closeExportModal = document.getElementById('closeExportModal');
+    const downloadNowBtn = document.getElementById('downloadNowBtn');
+
+    const guideModal = document.getElementById('guideModal');
+    const guideModalBtn = document.getElementById('guideModalBtn');
+    const closeGuideModal = document.getElementById('closeGuideModal');
+    const dismissGuideBtn = document.getElementById('dismissGuideBtn');
+
+    const cameraErrorModal = document.getElementById('cameraErrorModal');
+    const retryCameraBtn = document.getElementById('retryCameraBtn');
+    const cameraErrorMessage = document.getElementById('cameraErrorMessage');
+
+    // Canvas Resizing
+    function resizeCanvases() {
+      const w = window.innerWidth;
+      const h = window.innerHeight;
+
+      const tempCanvas = document.createElement('canvas');
+      tempCanvas.width = drawCanvas.width || w;
+      tempCanvas.height = drawCanvas.height || h;
+      const tempCtx = tempCanvas.getContext('2d');
+      if (drawCanvas.width > 0 && drawCanvas.height > 0) {
+        tempCtx.drawImage(drawCanvas, 0, 0);
+      }
+
+      [cameraCanvas, drawCanvas, trackingCanvas, cursorCanvas].forEach(c => {
+        c.width = w;
+        c.height = h;
+      });
+
+      if (tempCanvas.width > 0 && tempCanvas.height > 0) {
+        drawCtx.drawImage(tempCanvas, 0, 0, w, h);
+      }
+    }
+    window.addEventListener('resize', resizeCanvases);
+    window.addEventListener('orientationchange', () => setTimeout(resizeCanvases, 200));
+    resizeCanvases();
+
+    // Mirroring Control (Front camera is mirrored for natural selfie-view; back camera is direct)
+    function updateMirroring() {
+      AppState.isMirrored = (AppState.facingMode === 'user');
+      const mirrorCanvases = [cameraCanvas, drawCanvas, trackingCanvas];
+      mirrorCanvases.forEach(canvas => {
+        if (AppState.isMirrored) {
+          canvas.classList.add('mirror-view');
+        } else {
+          canvas.classList.remove('mirror-view');
+        }
+      });
+    }
+
+    // History System
+    function pushHistoryState() {
+      if (AppState.historyIndex < AppState.history.length - 1) {
+        AppState.history = AppState.history.slice(0, AppState.historyIndex + 1);
+      }
+
+      const snapshot = drawCtx.getImageData(0, 0, drawCanvas.width, drawCanvas.height);
+      AppState.history.push(snapshot);
+
+      if (AppState.history.length > AppState.maxHistory) {
+        AppState.history.shift();
+      } else {
+        AppState.historyIndex++;
+      }
+
+      updateHistoryButtons();
+    }
+
+    function undo() {
+      if (AppState.historyIndex > 0) {
+        AppState.historyIndex--;
+        const previousState = AppState.history[AppState.historyIndex];
+        drawCtx.putImageData(previousState, 0, 0);
+        updateHistoryButtons();
+      } else if (AppState.historyIndex === 0) {
+        AppState.historyIndex = -1;
+        drawCtx.clearRect(0, 0, drawCanvas.width, drawCanvas.height);
+        updateHistoryButtons();
+      }
+    }
+
+    function redo() {
+      if (AppState.historyIndex < AppState.history.length - 1) {
+        AppState.historyIndex++;
+        const nextState = AppState.history[AppState.historyIndex];
+        drawCtx.putImageData(nextState, 0, 0);
+        updateHistoryButtons();
+      }
+    }
+
+    function updateHistoryButtons() {
+      undoBtn.disabled = AppState.historyIndex < 0;
+      redoBtn.disabled = AppState.historyIndex >= AppState.history.length - 1;
+    }
+
+    function clearEntireCanvas(triggerConfetti = true) {
+      drawCtx.clearRect(0, 0, drawCanvas.width, drawCanvas.height);
+      pushHistoryState();
+
+      if (triggerConfetti && window.confetti) {
+        window.confetti({
+          particleCount: 45,
+          spread: 70,
+          origin: { y: 0.6 }
+        });
+      }
+    }
+
+    // Stroke Drawing
+    function startStroke(pt) {
+      AppState.isCurrentlyDrawing = true;
+      AppState.prevPoint = { x: pt.x, y: pt.y };
+    }
+
+    function drawStrokeTo(pt) {
+      if (!AppState.isCurrentlyDrawing || !AppState.prevPoint) {
+        startStroke(pt);
+        return;
+      }
+
+      const dist = Math.hypot(pt.x - AppState.prevPoint.x, pt.y - AppState.prevPoint.y);
+      if (dist < 0.5) return;
+
+      drawCtx.save();
+
+      if (AppState.tool === 'eraser') {
+        drawCtx.globalCompositeOperation = 'destination-out';
+        drawCtx.lineWidth = AppState.eraserSize;
+        drawCtx.strokeStyle = 'rgba(0,0,0,1)';
+        drawCtx.shadowBlur = 0;
+      } else {
+        drawCtx.globalCompositeOperation = 'source-over';
+        
+        let strokeColor = AppState.color;
+        if (AppState.tool === 'rainbow') {
+          AppState.rainbowHue = (AppState.rainbowHue + 3) % 360;
+          strokeColor = `hsl(${AppState.rainbowHue}, 100%, 55%)`;
+        }
+
+        drawCtx.strokeStyle = strokeColor;
+        drawCtx.lineWidth = AppState.brushSize;
+
+        if (AppState.tool === 'neon' || AppState.tool === 'rainbow') {
+          drawCtx.shadowColor = strokeColor;
+          drawCtx.shadowBlur = AppState.brushSize * 1.6;
+        } else {
+          drawCtx.shadowBlur = 1;
+          drawCtx.shadowColor = strokeColor;
+        }
+      }
+
+      drawCtx.lineCap = 'round';
+      drawCtx.lineJoin = 'round';
+
+      const midX = (AppState.prevPoint.x + pt.x) / 2;
+      const midY = (AppState.prevPoint.y + pt.y) / 2;
+
+      drawCtx.beginPath();
+      drawCtx.moveTo(AppState.prevPoint.x, AppState.prevPoint.y);
+      drawCtx.quadraticCurveTo(AppState.prevPoint.x, AppState.prevPoint.y, midX, midY);
+      drawCtx.stroke();
+      drawCtx.restore();
+
+      if (AppState.tool !== 'eraser') {
+        createParticle(pt.x, pt.y, AppState.color);
+      }
+
+      AppState.prevPoint = { x: midX, y: midY };
+    }
+
+    function endStroke() {
+      if (AppState.isCurrentlyDrawing) {
+        AppState.isCurrentlyDrawing = false;
+        AppState.prevPoint = null;
+        pushHistoryState();
+      }
+    }
+
+    // Particles
+    function createParticle(x, y, color) {
+      if (AppState.particles.length > 30) return;
+      AppState.particles.push({
+        x: x + (Math.random() - 0.5) * 6,
+        y: y + (Math.random() - 0.5) * 6,
+        vx: (Math.random() - 0.5) * 1.2,
+        vy: (Math.random() - 0.5) * 1.2 - 0.3,
+        alpha: 0.8,
+        size: Math.random() * (AppState.brushSize / 3) + 2,
+        color: color
+      });
+    }
+
+    function updateAndRenderParticles() {
+      cursorCtx.save();
+      for (let i = AppState.particles.length - 1; i >= 0; i--) {
+        const p = AppState.particles[i];
+        p.x += p.vx;
+        p.y += p.vy;
+        p.alpha -= 0.04;
+
+        if (p.alpha <= 0) {
+          AppState.particles.splice(i, 1);
+          continue;
+        }
+
+        const screenX = AppState.isMirrored ? (cursorCanvas.width - p.x) : p.x;
+        cursorCtx.beginPath();
+        cursorCtx.arc(screenX, p.y, p.size, 0, Math.PI * 2);
+        cursorCtx.fillStyle = p.color;
+        cursorCtx.globalAlpha = p.alpha;
+        cursorCtx.shadowColor = p.color;
+        cursorCtx.shadowBlur = 6;
+        cursorCtx.fill();
+      }
+      cursorCtx.restore();
+    }
+
+    // Advanced Mobile Vector Gesture Classifier
+    function classifyGestureAdvanced(landmarks) {
+      const palmScale = Math.hypot(
+        landmarks[9].x - landmarks[0].x,
+        landmarks[9].y - landmarks[0].y,
+        (landmarks[9].z || 0) - (landmarks[0].z || 0)
+      );
+
+      const scale = Math.max(palmScale, 0.05);
+
+      const dist3D = (i, j) => Math.hypot(
+        landmarks[i].x - landmarks[j].x,
+        landmarks[i].y - landmarks[j].y,
+        (landmarks[i].z || 0) - (landmarks[j].z || 0)
+      );
+
+      const isIndexExtended = dist3D(8, 0) > dist3D(6, 0) * 1.06 && dist3D(8, 0) > dist3D(5, 0) * 1.12;
+      const isMiddleExtended = dist3D(12, 0) > dist3D(10, 0) * 1.06 && dist3D(12, 0) > dist3D(9, 0) * 1.12;
+      const isRingExtended = dist3D(16, 0) > dist3D(14, 0) * 1.06 && dist3D(16, 0) > dist3D(13, 0) * 1.12;
+      const isPinkyExtended = dist3D(20, 0) > dist3D(18, 0) * 1.06 && dist3D(20, 0) > dist3D(17, 0) * 1.12;
+      const isThumbExtended = dist3D(4, 17) / scale > 0.85 || dist3D(4, 2) / scale > 0.6;
+
+      const extendedCount = (isIndexExtended ? 1 : 0) + 
+                            (isMiddleExtended ? 1 : 0) + 
+                            (isRingExtended ? 1 : 0) + 
+                            (isPinkyExtended ? 1 : 0) + 
+                            (isThumbExtended ? 1 : 0);
+
+      let rawGesture = 'IDLE';
+
+      if (isIndexExtended && isMiddleExtended && isRingExtended && isPinkyExtended && extendedCount >= 4) {
+        rawGesture = 'PALM_CLEAR';
+      }
+      else if (isIndexExtended && isMiddleExtended && !isRingExtended && !isPinkyExtended) {
+        rawGesture = 'HOVER';
+      }
+      else if (isIndexExtended && !isMiddleExtended && !isRingExtended && !isPinkyExtended) {
+        rawGesture = 'DRAW';
+      }
+
+      if (rawGesture === 'PALM_CLEAR') {
+        return 'PALM_CLEAR';
+      }
+
+      AppState.gestureDebounceBuffer.push(rawGesture);
+      if (AppState.gestureDebounceBuffer.length > AppState.debounceWindowSize) {
+        AppState.gestureDebounceBuffer.shift();
+      }
+
+      const counts = {};
+      AppState.gestureDebounceBuffer.forEach(g => { counts[g] = (counts[g] || 0) + 1; });
+      let dominant = rawGesture;
+      for (const k in counts) {
+        if (counts[k] >= 2) dominant = k;
+      }
+
+      return dominant;
+    }
+
+    // Hand Skeleton
+    function renderHandSkeleton(landmarks) {
+      trackingCtx.clearRect(0, 0, trackingCanvas.width, trackingCanvas.height);
+      const w = trackingCanvas.width;
+      const h = trackingCanvas.height;
+
+      const connections = [
+        [0, 1], [1, 2], [2, 3], [3, 4],
+        [0, 5], [5, 6], [6, 7], [7, 8],
+        [5, 9], [9, 10], [10, 11], [11, 12],
+        [9, 13], [13, 14], [14, 15], [15, 16],
+        [13, 17], [17, 18], [18, 19], [19, 20],
+        [0, 17]
+      ];
+
+      trackingCtx.lineWidth = 2.5;
+      trackingCtx.strokeStyle = 'rgba(56, 189, 248, 0.4)';
+      trackingCtx.shadowColor = '#00f0ff';
+      trackingCtx.shadowBlur = 4;
+
+      for (const [i, j] of connections) {
+        const pt1 = landmarks[i];
+        const pt2 = landmarks[j];
+        trackingCtx.beginPath();
+        trackingCtx.moveTo(pt1.x * w, pt1.y * h);
+        trackingCtx.lineTo(pt2.x * w, pt2.y * h);
+        trackingCtx.stroke();
+      }
+
+      for (let i = 0; i < landmarks.length; i++) {
+        const pt = landmarks[i];
+        const isTip = [4, 8, 12, 16, 20].includes(i);
+        trackingCtx.beginPath();
+        trackingCtx.arc(pt.x * w, pt.y * h, isTip ? 4.5 : 2.5, 0, Math.PI * 2);
+        trackingCtx.fillStyle = isTip ? '#ffffff' : '#38bdf8';
+        trackingCtx.fill();
+      }
+    }
+
+    // Dynamic Reticle
+    function renderScreenCursor(screenX, screenY, gesture) {
+      cursorCtx.save();
+      const brushSize = AppState.tool === 'eraser' ? AppState.eraserSize : AppState.brushSize;
+      const currentColor = AppState.tool === 'eraser' ? '#ff4d6d' : AppState.color;
+
+      if (gesture === 'DRAW') {
+        cursorCtx.beginPath();
+        cursorCtx.arc(screenX, screenY, brushSize / 2 + 3, 0, Math.PI * 2);
+        cursorCtx.fillStyle = currentColor;
+        cursorCtx.shadowColor = currentColor;
+        cursorCtx.shadowBlur = 10;
+        cursorCtx.fill();
+
+        cursorCtx.beginPath();
+        cursorCtx.arc(screenX, screenY, brushSize / 2 + 7, 0, Math.PI * 2);
+        cursorCtx.strokeStyle = 'rgba(255, 255, 255, 0.9)';
+        cursorCtx.lineWidth = 1.5;
+        cursorCtx.stroke();
+      } 
+      else if (gesture === 'HOVER') {
+        cursorCtx.beginPath();
+        cursorCtx.arc(screenX, screenY, 12, 0, Math.PI * 2);
+        cursorCtx.strokeStyle = '#f59e0b';
+        cursorCtx.lineWidth = 2;
+        cursorCtx.shadowColor = '#f59e0b';
+        cursorCtx.shadowBlur = 8;
+        cursorCtx.stroke();
+
+        cursorCtx.beginPath();
+        cursorCtx.arc(screenX, screenY, 3, 0, Math.PI * 2);
+        cursorCtx.fillStyle = '#ffffff';
+        cursorCtx.fill();
+      }
+
+      cursorCtx.restore();
+    }
+
+    // MediaPipe Hands Results Handler
+    function onHandResults(results) {
+      const now = performance.now();
+      cursorCtx.clearRect(0, 0, cursorCanvas.width, cursorCanvas.height);
+      trackingCtx.clearRect(0, 0, trackingCanvas.width, trackingCanvas.height);
+
+      if (AppState.showCameraFeed && results.image) {
+        cameraCanvas.style.opacity = '1';
+        cameraCtx.drawImage(results.image, 0, 0, cameraCanvas.width, cameraCanvas.height);
+      } else {
+        cameraCanvas.style.opacity = '0';
+      }
+
+      updateAndRenderParticles();
+
+      if (results.multiHandLandmarks && results.multiHandLandmarks.length > 0) {
+        const landmarks = results.multiHandLandmarks[0];
+        renderHandSkeleton(landmarks);
+
+        const rawTipX = landmarks[8].x * drawCanvas.width;
+        const rawTipY = landmarks[8].y * drawCanvas.height;
+
+        const smoothed = AppState.tipFilter.filter(rawTipX, rawTipY, now);
+
+        const screenX = AppState.isMirrored ? (cursorCanvas.width - smoothed.x) : smoothed.x;
+        const screenY = smoothed.y;
+
+        const gesture = classifyGestureAdvanced(landmarks);
+        AppState.currentGesture = gesture;
+        updateGestureHUD(gesture);
+
+        if (gesture === 'DRAW') {
+          cancelPalmClearTimer();
+          drawStrokeTo(smoothed);
+          renderScreenCursor(screenX, screenY, 'DRAW');
+        } 
+        else if (gesture === 'HOVER') {
+          endStroke();
+          cancelPalmClearTimer();
+          renderScreenCursor(screenX, screenY, 'HOVER');
+        } 
+        else if (gesture === 'PALM_CLEAR') {
+          endStroke();
+          handlePalmClearProgress();
+          
+          const palmCenterX = AppState.isMirrored 
+            ? (cursorCanvas.width - (landmarks[9].x * cursorCanvas.width))
+            : (landmarks[9].x * cursorCanvas.width);
+          const palmCenterY = landmarks[9].y * cursorCanvas.height;
+          
+          cursorCtx.save();
+          cursorCtx.beginPath();
+          cursorCtx.arc(palmCenterX, palmCenterY, 28, 0, Math.PI * 2);
+          cursorCtx.strokeStyle = 'rgba(239, 68, 68, 0.9)';
+          cursorCtx.lineWidth = 3;
+          cursorCtx.shadowColor = '#ef4444';
+          cursorCtx.shadowBlur = 12;
+          cursorCtx.stroke();
+          cursorCtx.restore();
+        } 
+        else {
+          endStroke();
+          cancelPalmClearTimer();
+        }
+
+      } else {
+        endStroke();
+        cancelPalmClearTimer();
+        AppState.tipFilter.reset();
+        updateGestureHUD('NO_HAND');
+      }
+    }
+
+    function handlePalmClearProgress() {
+      const now = performance.now();
+      if (!AppState.palmClearStartTime) {
+        AppState.palmClearStartTime = now;
+      }
+
+      const elapsed = now - AppState.palmClearStartTime;
+      const progress = Math.min(elapsed / AppState.palmClearDurationMs, 1.0);
+
+      clearCountdownOverlay.classList.remove('opacity-0', 'scale-90');
+      clearCountdownOverlay.classList.add('opacity-100', 'scale-100');
+
+      const perimeter = 314.159;
+      const offset = perimeter - (progress * perimeter);
+      radialProgressCircle.style.strokeDashoffset = offset;
+
+      const remainingSec = Math.max(0, ((AppState.palmClearDurationMs - elapsed) / 1000)).toFixed(1);
+      countdownSecText.textContent = `${remainingSec}s`;
+
+      if (progress >= 1.0) {
+        clearEntireCanvas(true);
+        cancelPalmClearTimer();
+      }
+    }
+
+    function cancelPalmClearTimer() {
+      AppState.palmClearStartTime = null;
+      clearCountdownOverlay.classList.remove('opacity-100', 'scale-100');
+      clearCountdownOverlay.classList.add('opacity-0', 'scale-90');
+      radialProgressCircle.style.strokeDashoffset = '314.159';
+    }
+
+    function updateGestureHUD(gesture) {
+      if (!gestureStatusBadge) return;
+      gestureStatusBadge.classList.remove('hidden');
+
+      const badgeMap = {
+        'DRAW': {
+          title: 'DRAWING ACTIVE',
+          color: 'text-cyan-400',
+          border: 'border-l-cyan-400',
+          icon: 'edit-3'
+        },
+        'HOVER': {
+          title: 'HOVERING',
+          color: 'text-amber-400',
+          border: 'border-l-amber-400',
+          icon: 'navigation'
+        },
+        'PALM_CLEAR': {
+          title: 'CLEARING CANVAS...',
+          color: 'text-rose-500',
+          border: 'border-l-rose-500',
+          icon: 'refresh-cw'
+        },
+        'IDLE': {
+          title: 'HAND IDLE',
+          color: 'text-slate-400',
+          border: 'border-l-slate-400',
+          icon: 'hand'
+        },
+        'NO_HAND': {
+          title: 'WAITING FOR HAND',
+          color: 'text-slate-500',
+          border: 'border-l-slate-600',
+          icon: 'eye-off'
+        }
+      };
+
+      const cfg = badgeMap[gesture] || badgeMap['IDLE'];
+      gestureStatusName.textContent = cfg.title;
+      gestureStatusName.className = `text-xs font-bold tracking-wide ${cfg.color}`;
+      gestureStatusBadge.className = `glass-panel px-3 py-1.5 rounded-2xl hidden lg:flex items-center gap-2 transition-all duration-200 border-l-4 ${cfg.border}`;
+      gestureStatusIcon.innerHTML = `<i data-lucide="${cfg.icon}" class="w-3.5 h-3.5 ${cfg.color}"></i>`;
+      lucide.createIcons();
+    }
+
+    // Tool switching
+    const toolButtons = {
+      brush: document.getElementById('toolBrush'),
+      neon: document.getElementById('toolNeon'),
+      rainbow: document.getElementById('toolRainbow'),
+      eraser: document.getElementById('toolEraser')
+    };
+
+    function setActiveTool(toolName) {
+      AppState.tool = toolName;
+      Object.keys(toolButtons).forEach(key => {
+        toolButtons[key].classList.toggle('active', key === toolName);
+      });
+      updateSizeIndicator();
+    }
+
+    toolButtons.brush.addEventListener('click', () => setActiveTool('brush'));
+    toolButtons.neon.addEventListener('click', () => setActiveTool('neon'));
+    toolButtons.rainbow.addEventListener('click', () => setActiveTool('rainbow'));
+    toolButtons.eraser.addEventListener('click', () => setActiveTool('eraser'));
+
+    // Colors
+    document.querySelectorAll('.color-swatch').forEach(btn => {
+      btn.addEventListener('click', () => {
+        const color = btn.getAttribute('data-color');
+        setColor(color);
+      });
+    });
+
+    customColorPicker.addEventListener('input', (e) => {
+      setColor(e.target.value);
+    });
+
+    function setColor(colorHex) {
+      AppState.color = colorHex;
+      if (AppState.tool === 'eraser') {
+        setActiveTool('brush');
+      }
+      
+      document.querySelectorAll('.color-swatch').forEach(btn => {
+        const active = btn.getAttribute('data-color') === colorHex;
+        btn.classList.toggle('border-white', active);
+        btn.classList.toggle('border-transparent', !active);
+      });
+
+      updateSizeIndicator();
+    }
+
+    // Brush Size
+    function updateSizeIndicator() {
+      const isEraser = AppState.tool === 'eraser';
+      const size = isEraser ? AppState.eraserSize : AppState.brushSize;
+
+      sliderValueText.textContent = `${size} px`;
+      sizeLabel.textContent = `${size}px`;
+
+      const color = isEraser ? '#ff4d6d' : AppState.color;
+      sizePreviewDot.style.backgroundColor = color;
+      sizePreviewDot.style.width = `${Math.min(Math.max(size / 3, 3), 14)}px`;
+      sizePreviewDot.style.height = `${Math.min(Math.max(size / 3, 3), 14)}px`;
+    }
+
+    brushSizeSlider.addEventListener('input', (e) => {
+      const val = parseInt(e.target.value, 10);
+      if (AppState.tool === 'eraser') {
+        AppState.eraserSize = val * 1.5;
+      } else {
+        AppState.brushSize = val;
+      }
+      updateSizeIndicator();
+    });
+
+    // Viewport & Camera Switching (Mobile Cross-Platform)
+    toggleCameraBgBtn.addEventListener('click', () => {
+      AppState.showCameraFeed = !AppState.showCameraFeed;
+      toggleCameraBgBtn.classList.toggle('active', AppState.showCameraFeed);
+    });
+
+    flipCameraBtn.addEventListener('click', async () => {
+      AppState.facingMode = (AppState.facingMode === 'user') ? 'environment' : 'user';
+      updateMirroring();
+      systemStatusText.innerHTML = `
+        <span class="inline-block w-1.5 h-1.5 rounded-full bg-cyan-400 animate-spin"></span>
+        Switching Camera...
+      `;
+      await startCameraStream();
+    });
+
+    undoBtn.addEventListener('click', undo);
+    redoBtn.addEventListener('click', redo);
+    clearBtn.addEventListener('click', () => clearEntireCanvas(true));
+
+    // Modals
+    exportModalBtn.addEventListener('click', () => exportModal.classList.remove('hidden', 'flex'));
+    closeExportModal.addEventListener('click', () => exportModal.classList.add('hidden'));
+
+    guideModalBtn.addEventListener('click', () => guideModal.classList.remove('hidden', 'flex'));
+    closeGuideModal.addEventListener('click', () => guideModal.classList.add('hidden'));
+    dismissGuideBtn.addEventListener('click', () => guideModal.classList.add('hidden'));
+
+    const formatButtons = {
+      transparent: document.getElementById('exportFormatTransparent'),
+      dark: document.getElementById('exportFormatDark'),
+      snapshot: document.getElementById('exportFormatSnapshot')
+    };
+
+    Object.keys(formatButtons).forEach(key => {
+      formatButtons[key].addEventListener('click', () => {
+        AppState.exportFormat = key;
+        Object.values(formatButtons).forEach(b => b.classList.remove('active'));
+        formatButtons[key].classList.add('active');
+      });
+    });
+
+    downloadNowBtn.addEventListener('click', () => {
+      const exportCanvas = document.createElement('canvas');
+      exportCanvas.width = drawCanvas.width;
+      exportCanvas.height = drawCanvas.height;
+      const ctx = exportCanvas.getContext('2d');
+
+      if (AppState.exportFormat === 'snapshot') {
+        ctx.save();
+        if (AppState.isMirrored) {
+          ctx.scale(-1, 1);
+          ctx.drawImage(cameraCanvas, -exportCanvas.width, 0);
+          ctx.drawImage(drawCanvas, -exportCanvas.width, 0);
+        } else {
+          ctx.drawImage(cameraCanvas, 0, 0);
+          ctx.drawImage(drawCanvas, 0, 0);
+        }
+        ctx.restore();
+      } else if (AppState.exportFormat === 'dark') {
+        ctx.fillStyle = '#07090e';
+        ctx.fillRect(0, 0, exportCanvas.width, exportCanvas.height);
+        ctx.save();
+        if (AppState.isMirrored) {
+          ctx.scale(-1, 1);
+          ctx.drawImage(drawCanvas, -exportCanvas.width, 0);
+        } else {
+          ctx.drawImage(drawCanvas, 0, 0);
+        }
+        ctx.restore();
+      } else {
+        ctx.save();
+        if (AppState.isMirrored) {
+          ctx.scale(-1, 1);
+          ctx.drawImage(drawCanvas, -exportCanvas.width, 0);
+        } else {
+          ctx.drawImage(drawCanvas, 0, 0);
+        }
+        ctx.restore();
+      }
+
+      const fileName = `air-canvas-${Date.now()}.png`;
+      const link = document.createElement('a');
+      link.download = fileName;
+      link.href = exportCanvas.toDataURL('image/png');
+      link.click();
+
+      exportModal.classList.add('hidden');
+      if (window.confetti) {
+        window.confetti({ particleCount: 50, spread: 75, origin: { y: 0.5 } });
+      }
+    });
+
+    // Touch & Stylus Drawing Fallback for iOS & Android
+    const viewportContainer = document.getElementById('viewportContainer');
+
+    function getTouchCoordinates(e) {
+      const rect = drawCanvas.getBoundingClientRect();
+      const touch = e.touches ? e.touches[0] : e;
+      const clientX = touch.clientX;
+      const clientY = touch.clientY;
+
+      let drawX;
+      if (AppState.isMirrored) {
+        drawX = drawCanvas.width - (clientX - rect.left);
+      } else {
+        drawX = (clientX - rect.left);
+      }
+      const drawY = clientY - rect.top;
+
+      return { x: drawX, y: drawY, screenX: clientX, screenY: clientY };
+    }
+
+    let isDirectTouching = false;
+
+    viewportContainer.addEventListener('pointerdown', (e) => {
+      if (e.target.closest('header, aside, #clearCountdownOverlay, #exportModal, #guideModal')) return;
+      isDirectTouching = true;
+      const pt = getTouchCoordinates(e);
+      startStroke(pt);
+      renderScreenCursor(pt.screenX, pt.screenY, 'DRAW');
+    });
+
+    window.addEventListener('pointermove', (e) => {
+      if (!isDirectTouching) return;
+      const pt = getTouchCoordinates(e);
+      drawStrokeTo(pt);
+      cursorCtx.clearRect(0, 0, cursorCanvas.width, cursorCanvas.height);
+      renderScreenCursor(pt.screenX, pt.screenY, 'DRAW');
+    });
+
+    window.addEventListener('pointerup', () => {
+      if (isDirectTouching) {
+        isDirectTouching = false;
+        endStroke();
+        cursorCtx.clearRect(0, 0, cursorCanvas.width, cursorCanvas.height);
+      }
+    });
+
+    window.addEventListener('pointercancel', () => {
+      if (isDirectTouching) {
+        isDirectTouching = false;
+        endStroke();
+        cursorCtx.clearRect(0, 0, cursorCanvas.width, cursorCanvas.height);
+      }
+    });
+
+    // Mobile-Optimized Camera & MediaPipe Setup
+    let currentStream = null;
+    let handsInstance = null;
+    let cameraRunning = false;
+
+    async function startCameraStream() {
+      if (currentStream) {
+        currentStream.getTracks().forEach(track => track.stop());
+        currentStream = null;
+      }
+
+      // Safe constraints for iOS Safari & Android Chrome
+      const constraints = {
+        audio: false,
+        video: {
+          facingMode: { ideal: AppState.facingMode },
+          width: { ideal: isMobile ? 640 : 1280 },
+          height: { ideal: isMobile ? 480 : 720 },
+          frameRate: { ideal: 30, max: 30 }
+        }
+      };
+
+      try {
+        currentStream = await navigator.mediaDevices.getUserMedia(constraints);
+        videoElement.srcObject = currentStream;
+
+        // Ensure iOS Safari starts playback inline
+        videoElement.setAttribute('playsinline', 'true');
+        videoElement.setAttribute('webkit-playsinline', 'true');
+        await videoElement.play();
+
+        systemStatusText.innerHTML = `
+          <span class="inline-block w-1.5 h-1.5 rounded-full bg-emerald-400"></span>
+          AI Active (${AppState.facingMode === 'user' ? 'Front' : 'Rear'})
+        `;
+
+        if (!cameraRunning) {
+          cameraRunning = true;
+          startProcessingLoop();
+        }
+
+      } catch (err) {
+        console.error('Camera streaming failed:', err);
+        systemStatusText.innerHTML = `
+          <span class="inline-block w-1.5 h-1.5 rounded-full bg-rose-500"></span>
+          Touch Mode (Camera Off)
+        `;
+        cameraErrorMessage.textContent = err.name === 'NotAllowedError'
+          ? 'Camera permission denied. On iOS Safari or Android Chrome, please tap Settings > Permissions and allow Camera.'
+          : `Camera error: ${err.message || 'Ensure your mobile camera is not in use by another app.'}`;
+        cameraErrorModal.classList.remove('hidden', 'flex');
+      }
+    }
+
+    async function startProcessingLoop() {
+      const processFrame = async () => {
+        if (cameraRunning && videoElement.readyState >= 2 && videoElement.videoWidth > 0 && handsInstance) {
+          try {
+            await handsInstance.send({ image: videoElement });
+          } catch (e) {
+            // Frame skip guard on mobile throttling
+          }
+        }
+        requestAnimationFrame(processFrame);
+      };
+      requestAnimationFrame(processFrame);
+    }
+
+    async function initMediaPipeHands() {
+      systemStatusText.innerHTML = `
+        <span class="inline-block w-1.5 h-1.5 rounded-full bg-amber-400 animate-ping"></span>
+        Loading Neural Engine...
+      `;
+
+      try {
+        handsInstance = new Hands({
+          locateFile: (file) => `https://cdn.jsdelivr.net/npm/@mediapipe/hands/${file}`
+        });
+
+        // Use modelComplexity: 0 on mobile for higher FPS and low thermal overhead
+        handsInstance.setOptions({
+          maxNumHands: 1,
+          modelComplexity: isMobile ? 0 : 1,
+          minDetectionConfidence: isMobile ? 0.72 : 0.82,
+          minTrackingConfidence: isMobile ? 0.72 : 0.82
+        });
+
+        handsInstance.onResults(onHandResults);
+
+        updateMirroring();
+        await startCameraStream();
+        pushHistoryState();
+
+      } catch (err) {
+        console.error('Neural initialization error:', err);
+        cameraErrorModal.classList.remove('hidden', 'flex');
+      }
+    }
+
+    retryCameraBtn.addEventListener('click', () => {
+      cameraErrorModal.classList.add('hidden');
+      startCameraStream();
+    });
+
+    window.addEventListener('load', () => {
+      lucide.createIcons();
+      updateSizeIndicator();
+      initMediaPipeHands();
+    });
+  </script>
+</body>
+</html>
